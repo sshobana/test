@@ -7,19 +7,120 @@ Parameters:
         Description: "The origin url to allow CORS requests from. This will be the base URL of your static SAM website."
         Type: "String"
 Resources:
-    GetSAMPartyCount:
-        Type: AWS::Serverless::Function
-        Properties:
-            Handler: index.handler
-            Runtime: nodejs4.3
-            CodeUri: ./index.zip
-            Environment:
-                Variables:
-                    SAM_MULTIPLIER: !Ref SamMultipler
-                    ORIGIN_URL: !Ref OriginUrl
-            Events:
-              GetResource:
-                Type: Api
-                Properties:
-                  Path: /sam
-                  Method: get
+   LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Effect: Allow
+                Resource:
+                  - 'arn:aws:logs:*:*:*'
+          PolicyName: LambdaPolicy
+    Type: 'AWS::IAM::Role'
+  Lambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+       CodeUri: ./index.zip
+        Handler: index.handler
+        Runtime: nodejs4.3
+      FunctionName: Upload
+      MemorySize: 128
+      Role: !GetAtt 
+        - LambdaRole
+        - Arn
+      Timeout: 60
+  LambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:invokeFunction'
+      FunctionName: !GetAtt 
+        - Lambda
+        - Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join 
+        - ''
+        - - 'arn:aws:execute-api:'
+          - !Ref 'AWS::Region'
+          - ':'
+          - !Ref 'AWS::AccountId'
+          - ':'
+          - !Ref API
+          - /*
+  API:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: MYAPI
+  APIDeployment:
+    DependsOn: HttpMethod
+    Properties:
+      RestApiId: !Ref API
+    Type: 'AWS::ApiGateway::Deployment'
+  APIStage:
+    Properties:
+      CacheClusterEnabled: false
+      DeploymentId: !Ref APIDeployment
+      RestApiId: !Ref API
+      StageName: prod
+    Type: 'AWS::ApiGateway::Stage'
+  Model:
+    Type: 'AWS::ApiGateway::Model'
+    Properties:
+      ContentType: application/json
+      Name: stack
+      RestApiId: !Ref API
+      Schema: {}
+  Resource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref API
+      ParentId: !GetAtt 
+        - API
+        - RootResourceId
+      PathPart: stack
+  HttpMethod:
+    Type: 'AWS::ApiGateway::Method'
+    DependsOn: LambdaPermission
+    Properties:
+      AuthorizationType: NONE
+      RestApiId: !Ref API
+      ResourceId: !Ref Resource
+      HttpMethod: GET
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Join 
+          - ''
+          - - 'arn:aws:apigateway:'
+            - !Ref 'AWS::Region'
+            - ':lambda:path/2015-03-31/functions/'
+            - !GetAtt 
+              - Lambda
+              - Arn
+            - /invocations
+        IntegrationResponses:
+          - StatusCode: 200
+        RequestTemplates:
+          application/json: '{"action": "put", "body": $input.json(''$'')}'
+      RequestModels:
+        application/json: !Ref Model
+      RequestParameters:
+        method.request.path.user: true
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          StatusCode: 200
+
